@@ -1,30 +1,39 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { RefreshCw, Rocket, Cpu, Cloud, Activity, HeartPulse, X, Maximize2, Zap, BarChart3, PieChart } from 'lucide-react';
+import { RefreshCw, Rocket, Cpu, Cloud, Activity, HeartPulse, X, Maximize2, Zap, BarChart3, PieChart, Edit2, Trash2 } from 'lucide-react';
 
-const CATEGORIES = {
+const ICON_MAP = {
+  "SEMICONDUCTORS": <Cpu size={14} />,
+  "CLOUD SERVICES": <Cloud size={14} />,
+  "FIBER OPTICS": <Activity size={14} />,
+  "HEALTHCARE": <HeartPulse size={14} />,
+  "ENERGY": <Zap size={14} />,
+  "ANALYTICS": <BarChart3 size={14} />
+};
+
+const DEFAULT_CATEGORIES = {
   "SEMICONDUCTORS": {
     label: "半導體",
     symbols: ["NVDA", "AMD", "TSM"],
-    icon: <Cpu size={14} />
+    iconKey: "SEMICONDUCTORS"
   },
   "CLOUD SERVICES": {
     label: "雲端業者",
     symbols: ["MSFT", "GOOGL", "ORCL", "AMZN"],
-    icon: <Cloud size={14} />
+    iconKey: "CLOUD SERVICES"
   },
   "FIBER OPTICS": {
     label: "光纖通訊",
     symbols: ["LITE", "COHR"],
-    icon: <Activity size={14} />
+    iconKey: "FIBER OPTICS"
   },
   "HEALTHCARE": {
     label: "醫療保險",
     symbols: ["UNH", "OSCR"],
-    icon: <HeartPulse size={14} />
+    iconKey: "HEALTHCARE"
   }
 };
 
-const FALLBACK_DATA = {
+const DEFAULT_FALLBACK_DATA = {
   "NVDA": { "price": 903.56, "change": 5.25, "growth": 126.0, "pe": 45.2, "mcap": "2.2T" },
   "AMD":  { "price": 178.23, "change": -0.85, "growth": 12.5, "pe": 38.4, "mcap": "288B" },
   "TSM":  { "price": 145.72, "change": 2.10,  "growth": 16.2, "pe": 22.1, "mcap": "750B" },
@@ -38,17 +47,34 @@ const FALLBACK_DATA = {
   "OSCR": { "price": 16.45,  "change": 12.85, "growth": 45.0, "pe": -12.4,"mcap": "3.5B" }
 };
 
-const ALL_SYMBOLS = Object.values(CATEGORIES).flatMap(c => c.symbols);
-
 const App = () => {
-  const [stockData, setStockData] = useState(FALLBACK_DATA);
+  const [categories, setCategories] = useState(() => {
+    const saved = localStorage.getItem('st_categories');
+    return saved ? JSON.parse(saved) : DEFAULT_CATEGORIES;
+  });
+  const [stockData, setStockData] = useState(DEFAULT_FALLBACK_DATA);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [selectedStock, setSelectedStock] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const [editingCategoryKey, setEditingCategoryKey] = useState(null);
+  const [newCategoryLabel, setNewCategoryLabel] = useState('');
+  const [addingToCategory, setAddingToCategory] = useState(null);
+  const [newTickerInput, setNewTickerInput] = useState('');
+  const [showNewSectorForm, setShowNewSectorForm] = useState(false);
+  const [newSectorLabel, setNewSectorLabel] = useState('');
+  const [newSectorIconKey, setNewSectorIconKey] = useState('SEMICONDUCTORS');
 
-  const fetchStockPrices = async () => {
+  const saveCategories = (cats) => {
+    localStorage.setItem('st_categories', JSON.stringify(cats));
+  };
+
+  const allSymbols = useMemo(() => Object.values(categories).flatMap(c => c.symbols), [categories]);
+
+  const fetchStockPrices = async (symbolList = allSymbols) => {
+    if (symbolList.length === 0) return;
     setLoading(true);
-    const symbols = ALL_SYMBOLS.join(',');
+    const symbols = symbolList.join(',');
     try {
       const res = await fetch(`/api/stocks/overview?symbols=${symbols}`);
       if (!res.ok) throw new Error('API error');
@@ -56,7 +82,7 @@ const App = () => {
       setStockData(prev => {
         const merged = { ...prev };
         for (const [sym, d] of Object.entries(data)) {
-          merged[sym] = { ...FALLBACK_DATA[sym], ...merged[sym], ...d };
+          merged[sym] = { ...DEFAULT_FALLBACK_DATA[sym], ...merged[sym], ...d };
         }
         return merged;
       });
@@ -68,7 +94,7 @@ const App = () => {
     }
   };
 
-  useEffect(() => { fetchStockPrices(); }, []);
+  useEffect(() => { fetchStockPrices(allSymbols); }, []);
 
   // 產生隨機走勢作為 fallback（真實資料由 Modal 自行抓取）
   const generateFallbackHistory = (startPrice, change) => {
@@ -82,8 +108,8 @@ const App = () => {
     return points;
   };
 
-  const Card = ({ symbol, data }) => {
-    const stockInfo = data || FALLBACK_DATA[symbol] || { price: 0, change: 0, growth: 0, pe: 0, mcap: "N/A" };
+  const Card = ({ symbol, data, editMode, onDelete }) => {
+    const stockInfo = data || DEFAULT_FALLBACK_DATA[symbol] || { price: 0, change: 0, growth: 0, pe: 0, mcap: "N/A" };
     const { change, price } = stockInfo;
     const isPositive = change >= 0;
 
@@ -95,24 +121,24 @@ const App = () => {
 
     return (
       <div
-        onClick={() => setSelectedStock({ symbol, ...stockInfo, isPositive })}
+        onClick={() => !editMode && setSelectedStock({ symbol, ...stockInfo, isPositive })}
         style={{
           flex: `${weight} 1 0%`,
           minWidth: '150px',
           minHeight: '130px',
           boxShadow: `inset 0 0 20px rgba(0,0,0,0.5), 0 0 15px -8px ${glowColor}`
         }}
-        className={`relative bg-gradient-to-br ${bgGradient} border border-white/10 m-[2px] group transition-all duration-300 hover:border-white/40 hover:z-20 overflow-hidden cursor-pointer active:scale-95`}
+        className={`relative bg-gradient-to-br ${bgGradient} border border-white/10 m-[2px] group transition-all duration-300 hover:border-white/40 hover:z-20 overflow-hidden ${!editMode ? 'cursor-pointer active:scale-95' : ''}`}
       >
         <div className={`absolute top-0 left-0 w-full h-[2px] ${isPositive ? 'bg-[#00FF8C]' : 'bg-[#FF2850]'}`}></div>
 
-        <div className="p-4 h-full flex flex-col justify-between relative z-10 pointer-events-none">
+        <div className="p-4 h-full flex flex-col justify-between relative z-10" style={{ pointerEvents: editMode ? 'auto' : 'none' }}>
           <div className="flex justify-between items-start">
-            <div className="flex flex-col">
+            <div className="flex flex-col pointer-events-none">
               <span className="text-[7px] font-black tracking-[0.2em] text-white/30 uppercase font-mono italic">UNIT_{symbol}</span>
               <span className="text-xl font-black text-white leading-none">{symbol}</span>
             </div>
-            <div className="relative flex items-center justify-center" style={{ width: '64px', height: '64px' }}>
+            <div className="relative flex items-center justify-center pointer-events-none" style={{ width: '64px', height: '64px' }}>
               <div className={`absolute inset-0 blur-xl opacity-30 ${isPositive ? 'bg-[#00FF8C]' : 'bg-[#FF2850]'}`}></div>
               <div className="relative">
                 {isPositive
@@ -123,7 +149,7 @@ const App = () => {
             </div>
           </div>
 
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-0.5 pointer-events-none">
             <div className="flex items-baseline gap-0.5">
               <span className="text-[8px] font-bold text-white/20 font-mono">$</span>
               <span className="text-2xl font-mono font-black text-white tracking-tighter">
@@ -137,9 +163,19 @@ const App = () => {
             </div>
           </div>
         </div>
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Maximize2 size={12} className="text-white/20" />
-        </div>
+
+        {editMode ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="absolute top-2 right-2 p-1.5 bg-[#FF2850]/20 hover:bg-[#FF2850]/40 border border-[#FF2850]/50 text-[#FF2850] transition-all"
+          >
+            <X size={14} />
+          </button>
+        ) : (
+          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            <Maximize2 size={12} className="text-white/20" />
+          </div>
+        )}
       </div>
     );
   };
@@ -164,9 +200,10 @@ const App = () => {
       return generateFallbackHistory(stock.price, stock.change);
     }, [detail, stock.price, stock.change]);
 
-    const pe     = detail?.pe     ?? stock.pe     ?? null;
-    const growth = detail?.growth ?? stock.growth ?? null;
-    const mcap   = detail?.mcap   ?? stock.mcap   ?? "N/A";
+    const defaultData = DEFAULT_FALLBACK_DATA[stock.symbol] || {};
+    const pe     = detail?.pe     ?? stock.pe     ?? defaultData.pe ?? null;
+    const growth = detail?.growth ?? stock.growth ?? defaultData.growth ?? null;
+    const mcap   = detail?.mcap   ?? stock.mcap   ?? defaultData.mcap ?? "N/A";
 
     const max = Math.max(...chartPoints);
     const min = Math.min(...chartPoints);
@@ -306,7 +343,7 @@ const App = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-8">
+          <div className="flex items-center gap-4">
             <div className="text-right">
               <span className="text-[9px] text-white/20 font-black uppercase block mb-1">Link_Status</span>
               <span className="font-mono text-lg text-[#00FF8C] font-bold tracking-tighter italic">
@@ -315,26 +352,181 @@ const App = () => {
                   : "CONNECTING..."}
               </span>
             </div>
-            <button onClick={fetchStockPrices} disabled={loading} className="p-4 bg-white/5 border border-white/10 hover:bg-white hover:text-black transition-all active:scale-90">
+            <button onClick={() => fetchStockPrices(allSymbols)} disabled={loading} className="p-4 bg-white/5 border border-white/10 hover:bg-white hover:text-black transition-all active:scale-90">
               <RefreshCw size={20} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button onClick={() => setEditMode(!editMode)} className={`p-4 border transition-all active:scale-90 ${editMode ? 'bg-white/20 border-white/40 text-white' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+              <Edit2 size={20} />
             </button>
           </div>
         </header>
 
         <main className="flex-1 overflow-y-auto scrollbar-hide px-1 pb-10">
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
-            {Object.entries(CATEGORIES).map(([catKey, config]) => (
+            {Object.entries(categories).map(([catKey, config]) => (
               <div key={catKey} className="flex flex-col">
                 <div className="flex items-center gap-4 mb-3 px-1">
-                  <div className="p-2 bg-white/5 border border-white/10 rounded-sm">{config.icon}</div>
-                  <h3 className="text-xs font-black text-white/70 tracking-[0.5em] uppercase italic">{config.label}</h3>
+                  <div className="p-2 bg-white/5 border border-white/10 rounded-sm">{ICON_MAP[config.iconKey]}</div>
+                  {editingCategoryKey === catKey ? (
+                    <input
+                      autoFocus
+                      type="text"
+                      value={newCategoryLabel}
+                      onChange={(e) => setNewCategoryLabel(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newCategoryLabel.trim()) {
+                          const updated = { ...categories, [catKey]: { ...config, label: newCategoryLabel } };
+                          setCategories(updated);
+                          saveCategories(updated);
+                          setEditingCategoryKey(null);
+                        } else if (e.key === 'Escape') {
+                          setEditingCategoryKey(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (newCategoryLabel.trim()) {
+                          const updated = { ...categories, [catKey]: { ...config, label: newCategoryLabel } };
+                          setCategories(updated);
+                          saveCategories(updated);
+                        }
+                        setEditingCategoryKey(null);
+                      }}
+                      className="flex-1 bg-black/60 border border-white/30 text-white px-2 py-1 text-xs font-black tracking-[0.5em] uppercase italic focus:outline-none focus:border-[#00FF8C]"
+                    />
+                  ) : (
+                    <h3
+                      onClick={() => editMode && (setEditingCategoryKey(catKey), setNewCategoryLabel(config.label))}
+                      className={`text-xs font-black text-white/70 tracking-[0.5em] uppercase italic ${editMode ? 'cursor-pointer hover:text-white/90' : ''}`}
+                    >
+                      {config.label}
+                    </h3>
+                  )}
                   <div className="flex-1 h-[1px] bg-gradient-to-r from-white/10 to-transparent"></div>
+                  {editMode && (
+                    <button
+                      onClick={() => {
+                        const updated = { ...categories };
+                        delete updated[catKey];
+                        setCategories(updated);
+                        saveCategories(updated);
+                      }}
+                      className="p-2 text-white/50 hover:text-[#FF2850] transition-colors"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
-                <div className="flex flex-wrap border border-white/5 bg-black/40 p-1.5 rounded-sm">
-                  {config.symbols.map(s => <Card key={s} symbol={s} data={stockData[s]} />)}
+                <div className="flex flex-wrap border border-white/5 bg-black/40 p-1.5 rounded-sm min-h-[140px]">
+                  {config.symbols.map(s => (
+                    <Card
+                      key={s}
+                      symbol={s}
+                      data={stockData[s]}
+                      editMode={editMode}
+                      onDelete={() => {
+                        const updated = { ...categories, [catKey]: { ...config, symbols: config.symbols.filter(sym => sym !== s) } };
+                        setCategories(updated);
+                        saveCategories(updated);
+                      }}
+                    />
+                  ))}
+                  {editMode && addingToCategory !== catKey && (
+                    <div
+                      onClick={() => setAddingToCategory(catKey)}
+                      className="flex items-center justify-center gap-2 flex-1 min-w-[140px] h-[140px] border-2 border-dashed border-white/10 hover:border-white/30 cursor-pointer transition-colors text-white/40 hover:text-white/60 text-xs font-black tracking-wide"
+                    >
+                      + ADD TICKER
+                    </div>
+                  )}
+                  {editMode && addingToCategory === catKey && (
+                    <div className="flex items-center justify-center flex-1 min-w-[140px] h-[140px] bg-white/5 border-2 border-white/20 p-3">
+                      <input
+                        autoFocus
+                        type="text"
+                        value={newTickerInput}
+                        onChange={(e) => setNewTickerInput(e.target.value.toUpperCase())}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && newTickerInput.trim()) {
+                            const updated = { ...categories, [catKey]: { ...config, symbols: [...config.symbols, newTickerInput] } };
+                            setCategories(updated);
+                            saveCategories(updated);
+                            fetchStockPrices([...allSymbols, newTickerInput]);
+                            setAddingToCategory(null);
+                            setNewTickerInput('');
+                          } else if (e.key === 'Escape') {
+                            setAddingToCategory(null);
+                            setNewTickerInput('');
+                          }
+                        }}
+                        onBlur={() => setAddingToCategory(null)}
+                        placeholder="e.g. AAPL"
+                        className="w-full bg-black/60 border border-white/30 text-white px-2 py-1 text-xs focus:outline-none focus:border-[#00FF8C] placeholder-white/30 text-center font-bold"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
+            {editMode && !showNewSectorForm && (
+              <div className="flex flex-col">
+                <div className="flex items-center gap-4 mb-3 px-1">
+                  <button
+                    onClick={() => setShowNewSectorForm(true)}
+                    className="p-2 bg-white/5 border border-dashed border-white/30 text-white/50 hover:text-white/80 hover:border-white/50 transition-colors rounded-sm"
+                  >
+                    + NEW SECTOR
+                  </button>
+                </div>
+              </div>
+            )}
+            {editMode && showNewSectorForm && (
+              <div className="flex flex-col">
+                <div className="bg-black/40 border border-white/20 p-6 rounded-sm space-y-4">
+                  <h4 className="text-xs font-black text-white/70 tracking-[0.5em] uppercase">建立新分類</h4>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={newSectorLabel}
+                    onChange={(e) => setNewSectorLabel(e.target.value)}
+                    placeholder="分類名稱（中文）"
+                    className="w-full bg-black/60 border border-white/30 text-white px-3 py-2 text-xs focus:outline-none focus:border-[#00FF8C]"
+                  />
+                  <select
+                    value={newSectorIconKey}
+                    onChange={(e) => setNewSectorIconKey(e.target.value)}
+                    className="w-full bg-black/60 border border-white/30 text-white px-3 py-2 text-xs focus:outline-none focus:border-[#00FF8C]"
+                  >
+                    {Object.keys(ICON_MAP).map(key => (
+                      <option key={key} value={key}>{key}</option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        if (newSectorLabel.trim()) {
+                          const catKey = newSectorLabel.toUpperCase().replace(/\s+/g, '_');
+                          const updated = { ...categories, [catKey]: { label: newSectorLabel, iconKey: newSectorIconKey, symbols: [] } };
+                          setCategories(updated);
+                          saveCategories(updated);
+                          setShowNewSectorForm(false);
+                          setNewSectorLabel('');
+                          setNewSectorIconKey('SEMICONDUCTORS');
+                        }
+                      }}
+                      className="flex-1 bg-[#00FF8C]/20 border border-[#00FF8C] text-[#00FF8C] px-3 py-2 text-xs font-bold hover:bg-[#00FF8C]/30 transition-all"
+                    >
+                      建立
+                    </button>
+                    <button
+                      onClick={() => { setShowNewSectorForm(false); setNewSectorLabel(''); }}
+                      className="flex-1 bg-white/5 border border-white/30 text-white/70 px-3 py-2 text-xs font-bold hover:bg-white/10 transition-all"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </main>
 
