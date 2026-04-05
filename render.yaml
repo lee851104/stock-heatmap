@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: starship-terminal
+    runtime: python
+    buildCommand: |
+      pip install -r backend/requirements.txt
+      cd frontend && npm install && npm run build
+    startCommand: cd backend && python app.py
+    envVars:
+      - key: PORT
+        value: 10000
