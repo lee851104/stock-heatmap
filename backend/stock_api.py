@@ -50,23 +50,32 @@ def _get_crumb(force: bool = False) -> str | None:
     取得 Yahoo Finance crumb。
     每次重取都清除 session cookies（避免舊 cookie 污染）。
     若回傳值是 JSON（含 '{'）代表失敗，回傳 None。
+
+    Crumb 是 CSRF 防護 token，部分 Yahoo Finance API 需要它。
+    若無法取得，後續 crumb 認證的 API 會失敗，但其他 API 仍可用。
     """
     global _crumb
     with _crumb_lock:
         if _crumb and not force:
             return _crumb
         try:
-            _session.cookies.clear()  # 清除舊 cookies，重新取
+            # 清除舊 session，確保乾淨狀態
+            _session.cookies.clear()
+            # 先訪問首頁，建立新 session
             _session.get(_YAHOO_HOME, timeout=10)
+            # 再請求 crumb（會自動附加 cookie）
             r = _session.get(_CRUMB_URL, timeout=10)
             text = r.text.strip()
+            # 判斷成功：status 200 + 非 JSON 格式 + 長度足夠
             if r.status_code == 200 and "{" not in text and len(text) > 3:
                 _crumb = text
+                return _crumb
             else:
                 _crumb = None
-        except Exception:
+                return None
+        except Exception as e:
             _crumb = None
-    return _crumb
+            return None
 
 
 # ── HTTP 工具 ────────────────────────────────────────────────────────
@@ -209,6 +218,8 @@ def get_overview(symbols: list[str]) -> dict:
                     result[orig]["price"]  = round(float(q_price), 2)
                 if q_change is not None:
                     result[orig]["change"] = round(float(q_change), 2)
+                # PE: v7 quote 的 forwardPE（不在 overview 返回，但用於 detail 備選）
+                # 這裡不補充，因為 overview 不應返回 PE（過重），detail 會單獨拉
     except (TypeError, KeyError):
         pass
 
@@ -232,15 +243,19 @@ def get_detail(symbol: str) -> dict:
     yf_sym = normalize_symbol(symbol)
     detail: dict = {"pe": None, "growth": None, "mcap": "N/A", "history": []}
 
-    # Tier 2a: v7 quote（mcap），需 crumb
+    # Tier 2a: v7 quote（mcap + Forward P/E），需 crumb
     quote = _get_with_crumb(_QUOTE_URL, {"symbols": yf_sym})
     try:
         q = (quote.get("quoteResponse", {}).get("result") or [{}])[0]
         detail["mcap"] = _fmt_mcap(_safe(q.get("marketCap")))
+        # Forward P/E：v7 quote 通常包含 forwardPE（較穩定）
+        pe_raw = _safe(q.get("forwardPE")) or _safe(q.get("trailingPE"))
+        if pe_raw is not None:
+            detail["pe"] = round(float(pe_raw), 2)
     except (KeyError, IndexError, TypeError):
         pass
 
-    # Tier 2b: v10 quoteSummary（Revenue Growth + Forward P/E），需 crumb
+    # Tier 2b: v10 quoteSummary（Revenue Growth），需 crumb
     summary = _get_with_crumb(
         _SUMMARY_URL.format(symbol=yf_sym),
         {"modules": "financialData"},
@@ -253,10 +268,6 @@ def get_detail(symbol: str) -> dict:
         # Revenue Growth
         g = _safe(fin.get("revenueGrowth", {}).get("raw"))
         detail["growth"] = round(float(g) * 100, 1) if g is not None else None
-
-        # Forward P/E：從 financialData 取
-        pe_raw = _safe(fin.get("forwardPE", {}).get("raw"))
-        detail["pe"] = round(float(pe_raw), 2) if pe_raw is not None else None
 
         if detail["mcap"] == "N/A":
             detail["mcap"] = _fmt_mcap(_safe(fin.get("marketCap", {}).get("raw")))
