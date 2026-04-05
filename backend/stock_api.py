@@ -148,14 +148,15 @@ def _fetch_overview_single(orig_sym: str) -> tuple[str, dict]:
     用 v8 chart API 取 price + change%（不需 crumb，穩定）。
     優先使用 meta.regularMarketChangePercent（Yahoo Finance 官方今日漲跌幅）。
     備選：用 regularMarketPrice vs chartPreviousClose 計算。
-    range 保持 "2d"，確保 chartPreviousClose = 前一個交易日收盤。
+    range 用 "1d" 確保 chartPreviousClose = 前一個交易日收盤（正確的前收盤）。
+    range="2d" 時 chartPreviousClose 是兩天範圍前的收盤（即前兩天），會導致漲跌幅偏大。
     """
     yf_sym  = normalize_symbol(orig_sym)
     default = {"price": 0, "change": 0, "mcap": "N/A"}
 
     data = _get_no_auth(
         _CHART_URL.format(symbol=yf_sym),
-        params={"interval": "1d", "range": "2d", "includePrePost": "false"},
+        params={"interval": "1d", "range": "1d", "includePrePost": "false"},
     )
     try:
         meta  = data["chart"]["result"][0]["meta"]
