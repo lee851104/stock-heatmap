@@ -146,45 +146,33 @@ def _fmt_mcap(val) -> str:
 def _fetch_overview_single(orig_sym: str) -> tuple[str, dict]:
     """
     用 v8 chart API 取 price + change%（不需 crumb，穩定）。
-    改進：直接從歷史 close 數據計算前兩個交易日的漲跌幅，確保精確。
+    優先使用 meta.regularMarketChangePercent（Yahoo Finance 官方今日漲跌幅）。
+    備選：用 regularMarketPrice vs chartPreviousClose 計算。
+    range 保持 "2d"，確保 chartPreviousClose = 前一個交易日收盤。
     """
     yf_sym  = normalize_symbol(orig_sym)
     default = {"price": 0, "change": 0, "mcap": "N/A"}
 
     data = _get_no_auth(
         _CHART_URL.format(symbol=yf_sym),
-        params={"interval": "1d", "range": "5d", "includePrePost": "false"},
+        params={"interval": "1d", "range": "2d", "includePrePost": "false"},
     )
     try:
-        res = data["chart"]["result"][0]
-        meta = res.get("meta", {})
-
-        # 取最新成交價（當前或最後收盤價）
+        meta  = data["chart"]["result"][0]["meta"]
         price = _safe(meta.get("regularMarketPrice"), 0)
 
-        # 從 close 數據倒序取最後兩個有效的收盤價
-        closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
-        closes_valid = [c for c in closes if c is not None]
+        # 優先：直接取 Yahoo Finance 計算好的今日漲跌幅（最準確）
+        change_pct = _safe(meta.get("regularMarketChangePercent"), None)
 
-        change_pct = 0
-        if len(closes_valid) >= 2:
-            # 最後一個 = 當天/最新收盤，倒數第二個 = 前一個交易日收盤
-            current_close = closes_valid[-1]
-            prev_close = closes_valid[-2]
-            if prev_close:
-                change_pct = ((current_close - prev_close) / prev_close) * 100
-                price = current_close  # 用最後收盤價代替 regularMarketPrice
-        elif closes_valid:
-            # 如果只有 1 個價格點，使用 chartPreviousClose 作為備選
+        if change_pct is None:
+            # 備選：用前收盤手動計算（range="2d" 時 chartPreviousClose = 昨天收盤）
             prev = _safe(meta.get("chartPreviousClose"), 0)
-            if prev and closes_valid:
-                change_pct = ((closes_valid[0] - prev) / prev) * 100
-                price = closes_valid[0]
+            change_pct = ((price - prev) / prev * 100) if prev else 0
 
         return orig_sym, {
             "price":  round(float(price), 2),
             "change": round(float(change_pct), 2),
-            "mcap":   "N/A",  # 由 v7 quote 補充（若可用）
+            "mcap":   "N/A",  # 由 Tier 1b v7 quote 補充
         }
     except (KeyError, IndexError, TypeError):
         return orig_sym, default
@@ -201,7 +189,8 @@ def get_overview(symbols: list[str]) -> dict:
             sym, data = f.result()
             result[sym] = data
 
-    # Tier 1b: 嘗試用 v7 quote 補 mcap（批次單一呼叫，失敗不影響主流程）
+    # Tier 1b: 嘗試用 v7 quote 補 mcap + 精確 price/change（批次單一呼叫）
+    # crumb 若失敗，Tier 1a 的 chart API 數據仍會保留作為備選
     yf_symbols = [normalize_symbol(s) for s in symbols]
     sym_map    = {normalize_symbol(s): s for s in symbols}
 
@@ -210,7 +199,15 @@ def get_overview(symbols: list[str]) -> dict:
         for q in (quote_data.get("quoteResponse", {}).get("result") or []):
             orig = sym_map.get(q.get("symbol", ""), "")
             if orig and orig in result:
+                # mcap
                 result[orig]["mcap"] = _fmt_mcap(_safe(q.get("marketCap")))
+                # 若 crumb 成功，用 v7 quote 的精確數值覆蓋 chart API 的數值
+                q_price  = _safe(q.get("regularMarketPrice"))
+                q_change = _safe(q.get("regularMarketChangePercent"))
+                if q_price  is not None:
+                    result[orig]["price"]  = round(float(q_price), 2)
+                if q_change is not None:
+                    result[orig]["change"] = round(float(q_change), 2)
     except (TypeError, KeyError):
         pass
 
@@ -234,25 +231,34 @@ def get_detail(symbol: str) -> dict:
     yf_sym = normalize_symbol(symbol)
     detail: dict = {"pe": None, "growth": None, "mcap": "N/A", "history": []}
 
-    # Tier 2a: v7 quote（PE + mcap），需 crumb
+    # Tier 2a: v7 quote（mcap），需 crumb
     quote = _get_with_crumb(_QUOTE_URL, {"symbols": yf_sym})
     try:
         q = (quote.get("quoteResponse", {}).get("result") or [{}])[0]
-        pe_raw = _safe(q.get("forwardPE")) or _safe(q.get("trailingPE"))
-        detail["pe"]   = round(float(pe_raw), 1) if pe_raw is not None else None
         detail["mcap"] = _fmt_mcap(_safe(q.get("marketCap")))
     except (KeyError, IndexError, TypeError):
         pass
 
-    # Tier 2b: v10 quoteSummary（Revenue Growth），需 crumb
+    # Tier 2b: v10 quoteSummary（Revenue Growth + Forward P/E），需 crumb
+    # 同時取 financialData 和 defaultKeyStatistics，以獲取更精確的 forwardPE
     summary = _get_with_crumb(
         _SUMMARY_URL.format(symbol=yf_sym),
-        {"modules": "financialData"},
+        {"modules": "financialData,defaultKeyStatistics"},
     )
     try:
-        fin = (summary.get("quoteSummary", {}).get("result") or [{}])[0].get("financialData", {})
-        g   = _safe(fin.get("revenueGrowth", {}).get("raw"))
+        res_list = (summary.get("quoteSummary", {}).get("result") or [{}])
+        res0 = res_list[0] if res_list else {}
+        fin   = res0.get("financialData", {})
+        stats = res0.get("defaultKeyStatistics", {})
+
+        # Revenue Growth
+        g = _safe(fin.get("revenueGrowth", {}).get("raw"))
         detail["growth"] = round(float(g) * 100, 1) if g is not None else None
+
+        # Forward P/E：從 defaultKeyStatistics 取（與 Yahoo Finance 網站一致）
+        pe_raw = _safe(stats.get("forwardPE", {}).get("raw"))
+        detail["pe"] = round(float(pe_raw), 2) if pe_raw is not None else None
+
         if detail["mcap"] == "N/A":
             detail["mcap"] = _fmt_mcap(_safe(fin.get("marketCap", {}).get("raw")))
     except (KeyError, IndexError, TypeError):
