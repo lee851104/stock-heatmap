@@ -1,11 +1,21 @@
 services:
   - type: web
-    name: starship-terminal
+    name: stock-heatmap
     runtime: python
-    buildCommand: |
-      pip install -r backend/requirements.txt
-      cd frontend && npm install && npm run build
+    pythonVersion: 3.11
+
+    buildCommand: >
+      pip install -r backend/requirements.txt &&
+      cd frontend &&
+      npm install &&
+      npm run build
+
     startCommand: cd backend && python app.py
+
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
       - key: PORT
-        value: 10000
+        value: 5000
+
+    healthCheckPath: /

@@ -1,15 +1,20 @@
 #!/bin/bash
-# 整合建置腳本：先 build React，再啟動 Flask
-
 set -e
 
-echo "=== [1/2] Building React frontend ==="
+echo "🔨 Building Stock Heatmap..."
+
+# Backend dependencies
+echo "📦 Installing backend dependencies..."
+cd backend
+pip install -r requirements.txt
+cd ..
+
+# Frontend build
+echo "🎨 Building frontend..."
 cd frontend
 npm install
 npm run build
 cd ..
 
-echo "=== [2/2] Starting Flask server ==="
-cd backend
-pip install -r requirements.txt
-python app.py
+echo "✅ Build complete!"
+echo "🚀 To start the server, run: cd backend && python app.py"

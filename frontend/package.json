@@ -1,7 +1,8 @@
 {
-  "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
+  "name": "stock-heatmap",
+  "private": false,
+  "version": "1.0.0",
+  "description": "Interactive stock market visualization with real-time data from Yahoo Finance",
   "type": "module",
   "scripts": {
     "dev": "vite",
