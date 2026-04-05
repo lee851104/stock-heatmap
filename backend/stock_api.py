@@ -146,21 +146,41 @@ def _fmt_mcap(val) -> str:
 def _fetch_overview_single(orig_sym: str) -> tuple[str, dict]:
     """
     用 v8 chart API 取 price + change%（不需 crumb，穩定）。
-    meta.regularMarketPrice  → 現價
-    meta.chartPreviousClose  → 前收盤
+    改進：直接從歷史 close 數據計算前兩個交易日的漲跌幅，確保精確。
     """
     yf_sym  = normalize_symbol(orig_sym)
     default = {"price": 0, "change": 0, "mcap": "N/A"}
 
     data = _get_no_auth(
         _CHART_URL.format(symbol=yf_sym),
-        params={"interval": "1d", "range": "2d", "includePrePost": "false"},
+        params={"interval": "1d", "range": "5d", "includePrePost": "false"},
     )
     try:
-        meta  = data["chart"]["result"][0]["meta"]
+        res = data["chart"]["result"][0]
+        meta = res.get("meta", {})
+
+        # 取最新成交價（當前或最後收盤價）
         price = _safe(meta.get("regularMarketPrice"), 0)
-        prev  = _safe(meta.get("chartPreviousClose"), 0)
-        change_pct = ((price - prev) / prev * 100) if prev else 0
+
+        # 從 close 數據倒序取最後兩個有效的收盤價
+        closes = res.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+        closes_valid = [c for c in closes if c is not None]
+
+        change_pct = 0
+        if len(closes_valid) >= 2:
+            # 最後一個 = 當天/最新收盤，倒數第二個 = 前一個交易日收盤
+            current_close = closes_valid[-1]
+            prev_close = closes_valid[-2]
+            if prev_close:
+                change_pct = ((current_close - prev_close) / prev_close) * 100
+                price = current_close  # 用最後收盤價代替 regularMarketPrice
+        elif closes_valid:
+            # 如果只有 1 個價格點，使用 chartPreviousClose 作為備選
+            prev = _safe(meta.get("chartPreviousClose"), 0)
+            if prev and closes_valid:
+                change_pct = ((closes_valid[0] - prev) / prev) * 100
+                price = closes_valid[0]
+
         return orig_sym, {
             "price":  round(float(price), 2),
             "change": round(float(change_pct), 2),
