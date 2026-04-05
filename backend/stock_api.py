@@ -241,23 +241,21 @@ def get_detail(symbol: str) -> dict:
         pass
 
     # Tier 2b: v10 quoteSummary（Revenue Growth + Forward P/E），需 crumb
-    # 同時取 financialData 和 defaultKeyStatistics，以獲取更精確的 forwardPE
     summary = _get_with_crumb(
         _SUMMARY_URL.format(symbol=yf_sym),
-        {"modules": "financialData,defaultKeyStatistics"},
+        {"modules": "financialData"},
     )
     try:
         res_list = (summary.get("quoteSummary", {}).get("result") or [{}])
         res0 = res_list[0] if res_list else {}
-        fin   = res0.get("financialData", {})
-        stats = res0.get("defaultKeyStatistics", {})
+        fin = res0.get("financialData", {})
 
         # Revenue Growth
         g = _safe(fin.get("revenueGrowth", {}).get("raw"))
         detail["growth"] = round(float(g) * 100, 1) if g is not None else None
 
-        # Forward P/E：從 defaultKeyStatistics 取（與 Yahoo Finance 網站一致）
-        pe_raw = _safe(stats.get("forwardPE", {}).get("raw"))
+        # Forward P/E：從 financialData 取
+        pe_raw = _safe(fin.get("forwardPE", {}).get("raw"))
         detail["pe"] = round(float(pe_raw), 2) if pe_raw is not None else None
 
         if detail["mcap"] == "N/A":
